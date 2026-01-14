@@ -10,20 +10,33 @@
 
 This project conducts a rigorous ablation study on the Alpamayo Vision-Language-Action (VLA) architecture. The primary objective is to solve the **inference-latency vs. safety trade-off** in autonomous driving.
 
-I hypothesize that the safety benefits of "System 2" explicit reasoning (found in large models like Alpamayo-10B + CF-VLA) can be distilled into a "System 1" efficient architecture (Alpamayo-1B + LCDrive) using closed-loop simulation feedback. We compare a baseline pre-trained model against a "Teacher" model (enhanced with counterfactual reasoning and robust training) and a "Student" model (optimized for latent reasoning and real-time execution).
+I hypothesize that the safety benefits of "System 2" explicit reasoning (found in large models like Alpamayo-10B + CF-VLA) can be distilled into a "System 1" efficient architecture (Alpamayo-1B + LCDrive) using closed-loop simulation feedback. The ablation matrix systematically isolates the contributions of inference-time reasoning, closed-loop training, teacher quality, latent reasoning transfer, and post-training RL.
 
 ---
 
 ## 2. Experimental Design (The Ablation Matrix)
 
-We evaluate four distinct model configurations to isolate the effects of **closed-loop training**, **explicit reasoning**, and **latent reasoning**.
+### Core Spine
 
-| ID | Model Architecture | Role | Key Methodologies | Hypothesis |
-| --- | --- | --- | --- | --- |
-| **A** | **Alpamayo-R1-10B** (Base) | **Baseline** | Behavior Cloning (BC) | Standard SOTA reference; likely susceptible to covariate shift and causal confusion. |
-| **B** | **Alpamayo-R1-10B** | **Teacher** | **RoaD + CF-VLA** | The "Safety Shield." Combines robust training (RoaD) with explicit counterfactual reasoning (CF-VLA) to maximize safety at the cost of compute. |
-| **D** | **Alpamayo-R1-1B** | **Weak Baseline** | Naive Distillation | Standard knowledge distillation from Model A. Expected to fail in long-tail scenarios due to lack of reasoning capacity. |
-| **F** | **Alpamayo-R1-1B** | **Student** | **LCDrive + GRPO** | The "Hero Model." Uses latent codes to mimic the Teacher's reasoning efficiently. Optimized via Group Relative Policy Optimization. |
+| ID | Params | Inference Reasoning | Training Data Regime                          | Post-Training | Purpose / What it isolates                              |
+| -- | -----: | ------------------- | --------------------------------------------- | ------------- | ------------------------------------------------------- |
+| S0 |    10B | None                | Open-loop BC (official)                       | None          | Anchor: baseline capability + latency                   |
+| S1 |    10B | **CF-VLA**          | Open-loop BC                                  | None          | Effect of **explicit reasoning at inference**           |
+| S2 |    10B | None                | **RoaD**                                      | None          | Effect of **closed-loop SFT alone**                     |
+| S3 |    10B | **CF-VLA**          | **RoaD**                                      | None          | "Teacher": best safety (slow)                           |
+| S4 |     1B | None                | Distill from S0 (action-only)                 | None          | Small model baseline; isolates size + naive distill     |
+| S5 |     1B | None                | Distill from **S3** (action-only)             | None          | Effect of **better teacher** without reasoning transfer |
+| S6 |     1B | **LCDrive**         | Distill from **S3** (action + latent targets) | None          | Effect of **latent reasoning** vs action-only           |
+| S7 |     1B | **LCDrive**         | Distill from S3                               | **RL (GRPO)** | Effect of **post-training** on latent student           |
+
+### Tiny Slice
+**May or may not do dependent on compute resource availability**
+
+| ID | Params | Inference Reasoning | Training        | Post-Training | Purpose                                |
+| -- | -----: | ------------------- | --------------- | ------------- | -------------------------------------- |
+| T0 |   0.5B | None                | Distill from S0 | None          | Floor baseline                         |
+| T1 |   0.5B | None                | Distill from S3 | None          | Teacher quality matters at tiny scale? |
+| T2 |   0.5B | **LCDrive**         | Distill from S3 | **RL (GRPO)** | Best shot at "tiny hero"               |
 
 ---
 
@@ -35,7 +48,7 @@ We evaluate four distinct model configurations to isolate the effects of **close
 
 * **Role:** Serves as the base policy for all experiments.
 
-### 3.2. The Teacher Stack (Model B)
+### 3.2. The Teacher Stack (S3)
 
 We construct a "super-expert" by combining two complementary frameworks:
 
@@ -50,7 +63,7 @@ We construct a "super-expert" by combining two complementary frameworks:
 
 
 
-### 3.3. The Student Stack (Model F)
+### 3.3. The Student Stack (S6/S7)
 
 We aim to achieve Teacher-level performance on a 1B parameter budget using latent efficiency:
 
@@ -82,7 +95,7 @@ All models are evaluated in **Alpasim**, a high-fidelity closed-loop simulator.
 
 
 2. **Reasoning (Secondary):**
-* **Reasoning Consistency:** (For Model F) Does the latent state decode to a valid textual explanation of the maneuver?
+* **Reasoning Consistency:** (For S6/S7) Does the latent state decode to a valid textual explanation of the maneuver?
 
 
 3. **Control (Tertiary):**
@@ -95,24 +108,34 @@ All models are evaluated in **Alpasim**, a high-fidelity closed-loop simulator.
 
 ## 5. Implementation Roadmap
 
-### Phase 1: Baselines
+### Phase 1: Baselines (S0, S4)
 
 * [ ] Set up Alpasim environment with NuRec scenes.
-* [ ] Evaluate pre-trained **Model A (10B)** to establish baseline metrics.
-* [ ] Train **Model D (1B)** via standard behavioral cloning distillation.
+* [ ] Evaluate pre-trained **S0 (10B)** to establish baseline metrics.
+* [ ] Train **S4 (1B)** via standard behavioral cloning distillation from S0.
 
-### Phase 2: The Teacher
+### Phase 2: The Teacher (S1, S2, S3)
 
 * [ ] Implement **CF-VLA** wrapper for Alpamayo.
+* [ ] Evaluate **S1** (S0 + CF-VLA inference reasoning).
 * [ ] Implement **RoaD** data collection pipeline.
+* [ ] Train **S2** on closed-loop SFT data (RoaD without CF-VLA guidance).
 * [ ] **Data Generation:** Run rollouts where CF-VLA acts as the "expert" interventionist.
-* [ ] Train **Model B** on these expert-guided rollouts.
+* [ ] Train **S3** on CF-VLA-guided rollouts.
 
-### Phase 3: The Student
+### Phase 3: The Students (S5, S6, S7)
 
+* [ ] Train **S5 (1B)** via action-only distillation from S3.
 * [ ] Implement **LCDrive** architecture (latent head) for the 1B model.
+* [ ] Train **S6** with action + latent targets from S3.
 * [ ] Implement **GRPO** trainer.
-* [ ] Train **Model F** using feedback from Alpasim.
+* [ ] Train **S7** using RL feedback from Alpasim.
+
+### Phase 4: Tiny Slice (T0, T1, T2) — Optional
+
+* [ ] Train **T0 (0.5B)** via distillation from S0.
+* [ ] Train **T1 (0.5B)** via distillation from S3.
+* [ ] Train **T2 (0.5B)** with LCDrive + GRPO.
 
 ---
 
